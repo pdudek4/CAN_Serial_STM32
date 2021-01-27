@@ -76,11 +76,13 @@ static void MX_CAN1_Init(void);
 static void MX_USART2_UART_Init(void);
 /* USER CODE BEGIN PFP */
 	
-void CAN_filterConfig(uint32_t*, bool active);
+void CAN_filterConfig(uint32_t*);
+void CAN_filterConfig2(void);
 void SendUARTCanMsg(char*);
 void ProcessUCMsg(void);
 void ProcessUCFilter(void);
 void ChangeFilter(uint32_t* canFilter, bool active, volatile bool* state);
+void CANFilterActivate(uint32_t filterBank, bool active);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -134,7 +136,8 @@ int main(void)
   MX_USART2_UART_Init();
   /* USER CODE BEGIN 2 */
 
-  CAN_filterConfig(CANfilter, CAN_FILTER_ENABLE);
+  CAN_filterConfig(CANfilter);
+	CAN_filterConfig2();
 	HAL_CAN_ActivateNotification(&hcan1, CAN_IT_RX_FIFO0_MSG_PENDING);
 	HAL_CAN_Start(&hcan1);
 	HAL_UART_Receive_IT(&huart2, canTxbuf, 22);
@@ -155,10 +158,13 @@ int main(void)
 			SendUARTCanMsg(canUmsg);
 		}
 		if(newFilter){
+			CANFilterActivate(0, 0); //wylacza filtr 0
 			ChangeFilter(CANfilter, CAN_FILTER_ENABLE, &newFilter);
 		}
 		if(deactFilter){
-			ChangeFilter(CANfilter, CAN_FILTER_DISABLE, &deactFilter);
+			CANFilterActivate(1, 0); //wylacza filtr 1
+			CANFilterActivate(0, 1); //wlacza filtr 0 akceptujacy wszystko
+			deactFilter = 0;
 		}
 
 
@@ -345,7 +351,29 @@ void SendUARTCanMsg(char* msg)
 	HAL_UART_Transmit_DMA(&huart2, (uint8_t*)msg, 24);
 }
 
-void CAN_filterConfig(uint32_t* canFilter, bool active)
+void CAN_filterConfig2(void)
+{
+	CAN_FilterTypeDef filterConfig;
+	//skala 32 bit jest spoko do Ext ID, do Std ID najlepiej 16 bit, wtedy mamy 2x wiecej ID 
+	//w skali 16 bit high i low oznacza 2 osobne ID
+	//w skali 32 bit high i low oznacza MSB i LSB danego 32 bitowego rejestru
+	//w trybie ID LIST oraz skali 16 bit w kazdym banku mozna ustawic 4 filtry Std ID
+	//w trybie ID LIST FilterMask oraz FilterId dotyczy roznych ID
+	//w trybie ID MASK FilterMask dotyczy maski a FilterId dotyczy ID
+	filterConfig.FilterBank = 0;
+	filterConfig.FilterActivation = CAN_FILTER_DISABLE;
+	filterConfig.FilterFIFOAssignment = 0;
+	filterConfig.FilterIdHigh = (0x000 << 5);
+	filterConfig.FilterIdLow = (0x001 << 5);
+	filterConfig.FilterMaskIdHigh = (0x001 << 5);
+	filterConfig.FilterMaskIdLow = (0x001 << 5);
+	filterConfig.FilterMode = CAN_FILTERMODE_IDMASK;
+	filterConfig.FilterScale = CAN_FILTERSCALE_16BIT;
+
+	HAL_CAN_ConfigFilter(&hcan1, &filterConfig);
+}
+
+void CAN_filterConfig(uint32_t* canFilter)
 {
 	CAN_FilterTypeDef filterConfig;
 	//skala 32 bit jest spoko do Ext ID, do Std ID najlepiej 16 bit, wtedy mamy 2x wiecej ID 
@@ -355,7 +383,7 @@ void CAN_filterConfig(uint32_t* canFilter, bool active)
 	//w trybie ID LIST FilterMask oraz FilterId dotyczy roznych ID
 	//w trybie ID MASK FilterMask dotyczy maski a FilterId dotyczy ID
 	filterConfig.FilterBank = 1;
-	filterConfig.FilterActivation = active;
+	filterConfig.FilterActivation = CAN_FILTER_ENABLE;
 	filterConfig.FilterFIFOAssignment = 0;
 	filterConfig.FilterIdHigh = (canFilter[0] << 5);
 	filterConfig.FilterIdLow = (canFilter[1] << 5);
@@ -403,11 +431,27 @@ void ProcessUCFilter(void)
 
 void ChangeFilter(uint32_t* canFilter, bool active, volatile bool* state)
 {
-	HAL_CAN_Stop(&hcan1);
-	CAN_filterConfig(canFilter, active);
-	HAL_CAN_Start(&hcan1);
+	//HAL_CAN_Stop(&hcan1);
+	//HAL_Delay(300);
+	CAN_filterConfig(canFilter);
+	//HAL_Delay(300);
+	//HAL_CAN_Start(&hcan1);
 	*state = false;
 }
+
+void CANFilterActivate(uint32_t filterBank, bool active)
+{
+	uint32_t filternbrbitpos;
+	
+	filternbrbitpos = (uint32_t)1 << (filterBank & 0x1FU);
+	
+	if(true == active){
+		SET_BIT(hcan1.Instance->FA1R, filternbrbitpos);
+	}
+	else 
+		CLEAR_BIT(hcan1.Instance->FA1R, filternbrbitpos);
+}
+
 /* USER CODE END 4 */
 
 /**
