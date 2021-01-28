@@ -81,6 +81,7 @@ void CAN_filterConfig2(void);
 void SendUARTCanMsg(char*);
 void ProcessUCMsg(void);
 void ProcessUCFilter(void);
+void ProcessCANconf(void);
 void ChangeFilter(uint32_t* canFilter, bool active, volatile bool* state);
 void CANFilterActivate(uint32_t filterBank, bool active);
 /* USER CODE END PFP */
@@ -91,10 +92,13 @@ void CANFilterActivate(uint32_t filterBank, bool active);
 	uint8_t canRxDataBuf[8];
 	uint8_t canTxbuf[30];
 	char canUmsg[24];
+	uint16_t nowePasmoCAN;
+	uint8_t prescalerCAN;
 	volatile bool toSendCAN = false;
 	volatile bool toSendUART = false;
 	volatile bool newFilter = false;
 	volatile bool deactFilter = false;
+	volatile bool pasmoCAN = false;
 	canTxData_t canTxData;
 	uint32_t CANfilter[4]  = {0x300, 0x301, 0x302, 0x303};
 
@@ -165,6 +169,21 @@ int main(void)
 			CANFilterActivate(1, 0); //wylacza filtr 1
 			CANFilterActivate(0, 1); //wlacza filtr 0 akceptujacy wszystko
 			deactFilter = 0;
+		}
+		if(pasmoCAN){
+			HAL_CAN_Stop(&hcan1); //Stop the CAN module and enable access to configuration registers.
+			/* Set the bit timing register */
+			uint32_t reg;
+			CLEAR_BIT(hcan1.Instance->BTR, 0);
+			CLEAR_BIT(hcan1.Instance->BTR, 1);
+			CLEAR_BIT(hcan1.Instance->BTR, 2);
+			CLEAR_BIT(hcan1.Instance->BTR, 4);
+			CLEAR_BIT(hcan1.Instance->BTR, 8);
+			CLEAR_BIT(hcan1.Instance->BTR, 16);
+			reg = READ_REG(hcan1.Instance->BTR);
+			WRITE_REG(hcan1.Instance->BTR, (uint32_t)( reg | (prescalerCAN - 1U)));
+			HAL_CAN_Start(&hcan1);
+			pasmoCAN = 0;
 		}
 
 
@@ -334,6 +353,9 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 	if('F' == canTxbuf[0] && ';' == canTxbuf[21]){
 		ProcessUCFilter();
 	}
+	if('P' == canTxbuf[0] && ';' == canTxbuf[21]){
+		ProcessCANconf();
+	}
 	HAL_UART_Receive_IT(&huart2, canTxbuf, 22);
 	
 }
@@ -429,13 +451,19 @@ void ProcessUCFilter(void)
 	
 }
 
+void ProcessCANconf(void)
+{
+	char tmp[4];
+	char *pEnd;
+	strncpy(tmp, (char*)&canTxbuf[5], 3);
+	
+	prescalerCAN = (uint8_t) (2000 / ((int)atoi(tmp)));
+	pasmoCAN = true;
+}
+
 void ChangeFilter(uint32_t* canFilter, bool active, volatile bool* state)
 {
-	//HAL_CAN_Stop(&hcan1);
-	//HAL_Delay(300);
 	CAN_filterConfig(canFilter);
-	//HAL_Delay(300);
-	//HAL_CAN_Start(&hcan1);
 	*state = false;
 }
 
