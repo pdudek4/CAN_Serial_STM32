@@ -143,6 +143,7 @@ int main(void)
   CAN_filterConfig(CANfilter);
 	CAN_filterConfig2();
 	HAL_CAN_ActivateNotification(&hcan1, CAN_IT_RX_FIFO0_MSG_PENDING);
+	HAL_CAN_ActivateNotification(&hcan1, CAN_IT_RX_FIFO0_FULL);
 	HAL_CAN_Start(&hcan1);
 	HAL_UART_Receive_IT(&huart2, canTxbuf, 22);
 	
@@ -152,10 +153,10 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-		if((hcan1.Instance->RF0R & CAN_RF0R_FMP0) > 0 ){
-			HAL_CAN_GetRxMessage(&hcan1, CAN_RX_FIFO0, &CANRxh, canRxDataBuf);
-			toSendUART = true;
-		}
+//		if((hcan1.Instance->RF0R & CAN_RF0R_FMP0) > 0 ){
+//			HAL_CAN_GetRxMessage(&hcan1, CAN_RX_FIFO0, &CANRxh, canRxDataBuf);
+//			toSendUART = true;
+//		}
 		if(toSendCAN){
 			CANTxh.StdId = canTxData.ID;
 			HAL_CAN_AddTxMessage(&hcan1, &CANTxh, canTxData.data, &txmailbox);
@@ -265,7 +266,7 @@ static void MX_CAN1_Init(void)
   hcan1.Init.AutoBusOff = DISABLE;
   hcan1.Init.AutoWakeUp = DISABLE;
   hcan1.Init.AutoRetransmission = DISABLE;
-  hcan1.Init.ReceiveFifoLocked = ENABLE;
+  hcan1.Init.ReceiveFifoLocked = DISABLE;
   hcan1.Init.TransmitFifoPriority = DISABLE;
   if (HAL_CAN_Init(&hcan1) != HAL_OK)
   {
@@ -346,6 +347,16 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
 {
 	HAL_CAN_GetRxMessage(&hcan1, CAN_RX_FIFO0, &CANRxh, canRxDataBuf);
 	toSendUART = true;
+}
+
+void HAL_CAN_RxFifo0FullCallback(CAN_HandleTypeDef *hcan)
+{
+	CLEAR_BIT(hcan->Instance->RF0R, CAN_RF0R_FULL0);
+	SET_BIT(hcan->Instance->RF0R, CAN_RF0R_RFOM0);
+	HAL_GetTick();
+	SET_BIT(hcan->Instance->RF0R, CAN_RF0R_RFOM0);
+	HAL_GetTick();
+	SET_BIT(hcan->Instance->RF0R, CAN_RF0R_RFOM0);
 }
 
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
