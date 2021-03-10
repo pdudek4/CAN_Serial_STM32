@@ -3,6 +3,7 @@
 "can_serial\main.o"
 "can_serial\stm32f4xx_it.o"
 "can_serial\stm32f4xx_hal_msp.o"
+"can_serial\can_qt.o"
 "can_serial\stm32f4xx_hal_can.o"
 "can_serial\stm32f4xx_hal_tim.o"
 "can_serial\stm32f4xx_hal_tim_ex.o"

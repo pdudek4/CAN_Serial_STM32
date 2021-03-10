@@ -33,3 +33,4 @@ can_serial\main.o: C:/Users/Przemek/STM32Cube/Repository/STM32Cube_FW_F4_V1.24.1
 can_serial\main.o: D:\Programy\Keil\ARM\ARMCC\Bin\..\include\string.h
 can_serial\main.o: D:\Programy\Keil\ARM\ARMCC\Bin\..\include\stdlib.h
 can_serial\main.o: D:\Programy\Keil\ARM\ARMCC\Bin\..\include\stdbool.h
+can_serial\main.o: ..\MDK-ARM\CAN_Qt.h

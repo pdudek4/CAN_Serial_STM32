@@ -26,6 +26,8 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdbool.h>
+
+#include "CAN_Qt.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -63,7 +65,7 @@ uint32_t txmailbox;
 		uint8_t DLC;
 	} canTxData_t;
 	
-
+CAN_param_t CAN_param;
 	
 
 /* USER CODE END PV */
@@ -76,14 +78,13 @@ static void MX_CAN1_Init(void);
 static void MX_USART2_UART_Init(void);
 /* USER CODE BEGIN PFP */
 	
-void CAN_filterConfig(uint32_t*);
-void CAN_filterConfig2(void);
+
 void SendUARTCanMsg(char*);
 void ProcessUCMsg(void);
 void ProcessUCFilter(void);
-void ProcessCANconf(void);
-void ChangeFilter(uint32_t* canFilter, bool active, volatile bool* state);
-void CANFilterActivate(uint32_t filterBank, bool active);
+void ProcessCANconf(CAN_param_t* CAN_param, uint8_t* tx_buf);
+	
+
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -93,15 +94,16 @@ void CANFilterActivate(uint32_t filterBank, bool active);
 	uint8_t canTxbuf[30];
 	char canUmsg[24];
 	uint16_t nowePasmoCAN;
-	uint8_t prescalerCAN;
 	volatile bool toSendCAN = false;
 	volatile bool toSendUART = false;
 	volatile bool newFilter = false;
 	volatile bool deactFilter = false;
-	volatile bool pasmoCAN = false;
+	
 	canTxData_t canTxData;
 	uint32_t CANfilter[4]  = {0x300, 0x301, 0x302, 0x303};
+	
 
+	
 /* USER CODE END 0 */
 
 /**
@@ -139,9 +141,10 @@ int main(void)
   MX_CAN1_Init();
   MX_USART2_UART_Init();
   /* USER CODE BEGIN 2 */
+	CAN_param.pasmoCAN = false;
+
 
   CAN_filterConfig(CANfilter);
-	CAN_filterConfig2();
 	HAL_CAN_ActivateNotification(&hcan1, CAN_IT_RX_FIFO0_MSG_PENDING);
 	HAL_CAN_ActivateNotification(&hcan1, CAN_IT_RX_FIFO0_FULL);
 	HAL_CAN_Start(&hcan1);
@@ -158,6 +161,7 @@ int main(void)
 //			toSendUART = true;
 //		}
 		if(toSendCAN){
+			//Dodaj DLC do CANTxh
 			CANTxh.StdId = canTxData.ID;
 			HAL_CAN_AddTxMessage(&hcan1, &CANTxh, canTxData.data, &txmailbox);
 			toSendCAN = false; // do zmiany do przerwania cantxcplt
@@ -167,28 +171,17 @@ int main(void)
 			SendUARTCanMsg(canUmsg);
 		}
 		if(newFilter){
-			CANFilterActivate(0, 0); //wylacza filtr 0
-			ChangeFilter(CANfilter, CAN_FILTER_ENABLE, &newFilter);
+			CANFilterActivate(0, false); //wylacza filtr 0
+			CAN_filterConfig(CANfilter);
+			newFilter = false;
 		}
 		if(deactFilter){
-			CANFilterActivate(1, 0); //wylacza filtr 1
-			CANFilterActivate(0, 1); //wlacza filtr 0 akceptujacy wszystko
+			CANFilterActivate(1, false); //wylacza filtr 1
+			CANFilterActivate(0, true); //wlacza filtr 0 akceptujacy wszystko
 			deactFilter = 0;
 		}
-		if(pasmoCAN){
-			HAL_CAN_Stop(&hcan1); //Stop the CAN module and enable access to configuration registers.
-			/* Set the bit timing register */
-			uint32_t reg;
-			CLEAR_BIT(hcan1.Instance->BTR, 0);
-			CLEAR_BIT(hcan1.Instance->BTR, 1);
-			CLEAR_BIT(hcan1.Instance->BTR, 2);
-			CLEAR_BIT(hcan1.Instance->BTR, 4);
-			CLEAR_BIT(hcan1.Instance->BTR, 8);
-			CLEAR_BIT(hcan1.Instance->BTR, 16);
-			reg = READ_REG(hcan1.Instance->BTR);
-			WRITE_REG(hcan1.Instance->BTR, (uint32_t)( reg | (prescalerCAN - 1U)));
-			HAL_CAN_Start(&hcan1);
-			pasmoCAN = 0;
+		if(CAN_param.pasmoCAN){
+			CAN_Speed_Change(&CAN_param);
 		}
 
 
@@ -257,7 +250,7 @@ static void MX_CAN1_Init(void)
 	//2 = 1000   4 = 500    8 = 250    16 = 125 kbps
   /* USER CODE END CAN1_Init 1 */
   hcan1.Instance = CAN1;
-  hcan1.Init.Prescaler = 2;
+  hcan1.Init.Prescaler = 8;
   hcan1.Init.Mode = CAN_MODE_NORMAL;
   hcan1.Init.SyncJumpWidth = CAN_SJW_1TQ;
   hcan1.Init.TimeSeg1 = CAN_BS1_13TQ;
@@ -369,7 +362,7 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 		ProcessUCFilter();
 	}
 	if('P' == canTxbuf[0] && ';' == canTxbuf[21]){
-		ProcessCANconf();
+		ProcessCANconf(&CAN_param, canTxbuf);
 	}
 	HAL_UART_Receive_IT(&huart2, canTxbuf, 22);
 	
@@ -388,49 +381,6 @@ void SendUARTCanMsg(char* msg)
 	HAL_UART_Transmit_DMA(&huart2, (uint8_t*)msg, 24);
 }
 
-void CAN_filterConfig2(void)
-{
-	CAN_FilterTypeDef filterConfig;
-	//skala 32 bit jest spoko do Ext ID, do Std ID najlepiej 16 bit, wtedy mamy 2x wiecej ID 
-	//w skali 16 bit high i low oznacza 2 osobne ID
-	//w skali 32 bit high i low oznacza MSB i LSB danego 32 bitowego rejestru
-	//w trybie ID LIST oraz skali 16 bit w kazdym banku mozna ustawic 4 filtry Std ID
-	//w trybie ID LIST FilterMask oraz FilterId dotyczy roznych ID
-	//w trybie ID MASK FilterMask dotyczy maski a FilterId dotyczy ID
-	filterConfig.FilterBank = 0;
-	filterConfig.FilterActivation = CAN_FILTER_DISABLE;
-	filterConfig.FilterFIFOAssignment = 0;
-	filterConfig.FilterIdHigh = (0x000 << 5);
-	filterConfig.FilterIdLow = (0x001 << 5);
-	filterConfig.FilterMaskIdHigh = (0x001 << 5);
-	filterConfig.FilterMaskIdLow = (0x001 << 5);
-	filterConfig.FilterMode = CAN_FILTERMODE_IDMASK;
-	filterConfig.FilterScale = CAN_FILTERSCALE_16BIT;
-
-	HAL_CAN_ConfigFilter(&hcan1, &filterConfig);
-}
-
-void CAN_filterConfig(uint32_t* canFilter)
-{
-	CAN_FilterTypeDef filterConfig;
-	//skala 32 bit jest spoko do Ext ID, do Std ID najlepiej 16 bit, wtedy mamy 2x wiecej ID 
-	//w skali 16 bit high i low oznacza 2 osobne ID
-	//w skali 32 bit high i low oznacza MSB i LSB danego 32 bitowego rejestru
-	//w trybie ID LIST oraz skali 16 bit w kazdym banku mozna ustawic 4 filtry Std ID
-	//w trybie ID LIST FilterMask oraz FilterId dotyczy roznych ID
-	//w trybie ID MASK FilterMask dotyczy maski a FilterId dotyczy ID
-	filterConfig.FilterBank = 1;
-	filterConfig.FilterActivation = CAN_FILTER_ENABLE;
-	filterConfig.FilterFIFOAssignment = 0;
-	filterConfig.FilterIdHigh = (canFilter[0] << 5);
-	filterConfig.FilterIdLow = (canFilter[1] << 5);
-	filterConfig.FilterMaskIdHigh = (canFilter[2] << 5);
-	filterConfig.FilterMaskIdLow = (canFilter[3] << 5);
-	filterConfig.FilterMode = CAN_FILTERMODE_IDLIST;
-	filterConfig.FilterScale = CAN_FILTERSCALE_16BIT;
-
-	HAL_CAN_ConfigFilter(&hcan1, &filterConfig);
-}
 
 void ProcessUCMsg(void)
 {
@@ -466,34 +416,16 @@ void ProcessUCFilter(void)
 	
 }
 
-void ProcessCANconf(void)
+void ProcessCANconf(CAN_param_t* CAN_param, uint8_t* tx_buf)
 {
 	char tmp[4];
-	char *pEnd;
-	strncpy(tmp, (char*)&canTxbuf[5], 3);
+	strncpy(tmp, (char*)&tx_buf[5], 3);
 	
-	prescalerCAN = (uint8_t) (2000 / ((int)atoi(tmp)));
-	pasmoCAN = true;
+	CAN_param->prescalerCAN = (uint8_t) (2000 / ((int)atoi(tmp)));
+	CAN_param->pasmoCAN = true;
 }
 
-void ChangeFilter(uint32_t* canFilter, bool active, volatile bool* state)
-{
-	CAN_filterConfig(canFilter);
-	*state = false;
-}
 
-void CANFilterActivate(uint32_t filterBank, bool active)
-{
-	uint32_t filternbrbitpos;
-	
-	filternbrbitpos = (uint32_t)1 << (filterBank & 0x1FU);
-	
-	if(true == active){
-		SET_BIT(hcan1.Instance->FA1R, filternbrbitpos);
-	}
-	else 
-		CLEAR_BIT(hcan1.Instance->FA1R, filternbrbitpos);
-}
 
 /* USER CODE END 4 */
 
